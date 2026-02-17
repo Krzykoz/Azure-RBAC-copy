@@ -158,3 +158,4 @@ jobs:
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/**/*
           if-no-files-found: error
           retention-days: 30
+
