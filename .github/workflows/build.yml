@@ -30,7 +30,7 @@ jobs:
           - platform: ubuntu-22.04
             rust_target: aarch64-unknown-linux-gnu
             label: linux-arm64
-            args: '--target aarch64-unknown-linux-gnu'
+            args: '--target aarch64-unknown-linux-gnu --bundles deb rpm'
 
           # ── macOS x86_64 (Intel) ─────────────────────────
           - platform: macos-latest
