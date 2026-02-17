@@ -83,70 +83,80 @@ pub async fn resolve_identities(
 // --- Analysis Commands ---
 
 #[command]
-pub fn run_analysis(
+pub async fn run_analysis(
     policies: Vec<AccessPolicyEntry>,
     available_roles: Vec<RoleDefinition>,
     role_assignments: Vec<RoleAssignment>,
     vault_id: String,
     include_custom_roles: bool,
-) -> Vec<MigrationAnalysis> {
-    let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
-        available_roles.clone()
-    } else {
-        available_roles
-            .iter()
-            .filter(|r| r.properties.role_type == "BuiltInRole")
-            .cloned()
-            .collect()
-    };
+) -> Result<Vec<MigrationAnalysis>, String> {
+    tokio::task::spawn_blocking(move || {
+        let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
+            available_roles.clone()
+        } else {
+            available_roles
+                .iter()
+                .filter(|r| r.properties.role_type == "BuiltInRole")
+                .cloned()
+                .collect()
+        };
 
-    let mut analysis = analysis_service::analyze_policies(&policies, &roles_to_analyze);
+        let mut analysis = analysis_service::analyze_policies(&policies, &roles_to_analyze);
 
-    // Enhance with existing coverage
-    for a in &mut analysis {
-        let coverage = analysis_service::analyze_existing_coverage(
-            &a.original_policy,
-            &role_assignments,
-            &available_roles,
-            Some(&vault_id),
-        );
-        a.existing_coverage = Some(coverage);
-    }
+        // Enhance with existing coverage
+        for a in &mut analysis {
+            let coverage = analysis_service::analyze_existing_coverage(
+                &a.original_policy,
+                &role_assignments,
+                &available_roles,
+                Some(&vault_id),
+            );
+            a.existing_coverage = Some(coverage);
+        }
 
-    analysis
+        analysis
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
-/// Analyze a single policy (for parallel per-identity analysis from frontend)
+/// Analyze a single policy (for parallel per-identity analysis from frontend).
+/// Uses spawn_blocking to offload CPU work to the thread pool, keeping the
+/// main thread free for UI rendering and enabling true parallelism.
 #[command]
-pub fn analyze_single_policy(
+pub async fn analyze_single_policy(
     policy: AccessPolicyEntry,
     available_roles: Vec<RoleDefinition>,
     role_assignments: Vec<RoleAssignment>,
     vault_id: String,
     include_custom_roles: bool,
-) -> MigrationAnalysis {
-    let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
-        available_roles.clone()
-    } else {
-        available_roles
-            .iter()
-            .filter(|r| r.properties.role_type == "BuiltInRole")
-            .cloned()
-            .collect()
-    };
+) -> Result<MigrationAnalysis, String> {
+    tokio::task::spawn_blocking(move || {
+        let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
+            available_roles.clone()
+        } else {
+            available_roles
+                .iter()
+                .filter(|r| r.properties.role_type == "BuiltInRole")
+                .cloned()
+                .collect()
+        };
 
-    let mut results = analysis_service::analyze_policies(&[policy], &roles_to_analyze);
-    let mut result = results.remove(0);
+        let mut results = analysis_service::analyze_policies(&[policy], &roles_to_analyze);
+        let mut result = results.remove(0);
 
-    let coverage = analysis_service::analyze_existing_coverage(
-        &result.original_policy,
-        &role_assignments,
-        &available_roles,
-        Some(&vault_id),
-    );
-    result.existing_coverage = Some(coverage);
+        let coverage = analysis_service::analyze_existing_coverage(
+            &result.original_policy,
+            &role_assignments,
+            &available_roles,
+            Some(&vault_id),
+        );
+        result.existing_coverage = Some(coverage);
 
-    result
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // --- Export Commands ---
