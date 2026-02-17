@@ -3,6 +3,32 @@ use chrono::Utc;
 
 use crate::types::*;
 
+/// Escape a string for safe inclusion in CSV to prevent formula injection.
+/// Prefixes cells starting with =, +, -, @, \t, \r with a single quote.
+fn csv_escape(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.starts_with('=')
+        || trimmed.starts_with('+')
+        || trimmed.starts_with('-')
+        || trimmed.starts_with('@')
+        || trimmed.starts_with('\t')
+        || trimmed.starts_with('\r')
+    {
+        format!("'{}", value)
+    } else {
+        value.to_string()
+    }
+}
+
+/// Escape a string for safe inclusion in a PowerShell double-quoted string.
+/// Escapes backticks, dollar signs, and double quotes.
+fn ps_escape(value: &str) -> String {
+    value
+        .replace('`', "``")
+        .replace('$', "`$")
+        .replace('"', "`\"")
+}
+
 /// Generate CSV export
 pub fn export_to_csv(
     results: &[MigrationAnalysis],
@@ -52,11 +78,11 @@ pub fn export_to_csv(
 
             format!(
                 "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}%\",\"{}\",\"{}\"",
-                display_name,
-                r.original_policy.object_id,
-                identity_type,
-                rec.strategy,
-                rec.role_name,
+                csv_escape(&display_name),
+                csv_escape(&r.original_policy.object_id),
+                csv_escape(&identity_type),
+                csv_escape(&rec.strategy),
+                csv_escape(&rec.role_name),
                 rec.confidence,
                 rec.missing_permissions.len(),
                 rec.excess_permissions.len()
@@ -175,9 +201,9 @@ pub fn export_to_powershell(
         "# WARNING: Review this script carefully before running!".to_string(),
         "# This script will create role assignments for the Key Vault.".to_string(),
         String::new(),
-        format!("$vaultName = \"{}\"", vault_name),
-        format!("$subscriptionId = \"{}\"", subscription_id),
-        format!("$scope = \"{}\"", vault_resource_id),
+        format!("$vaultName = \"{}\"", ps_escape(vault_name)),
+        format!("$subscriptionId = \"{}\"", ps_escape(subscription_id)),
+        format!("$scope = \"{}\"", ps_escape(vault_resource_id)),
         String::new(),
         "# Get the Key Vault resource".to_string(),
         "$vault = Get-AzKeyVault -VaultName $vaultName".to_string(),
@@ -268,9 +294,9 @@ pub fn export_to_powershell(
                     lines.push("New-AzRoleAssignment `".to_string());
                     lines.push(format!(
                         "  -ObjectId \"{}\" `",
-                        r.original_policy.object_id
+                        ps_escape(&r.original_policy.object_id)
                     ));
-                    lines.push(format!("  -RoleDefinitionName \"{}\" `", role_name));
+                    lines.push(format!("  -RoleDefinitionName \"{}\" `", ps_escape(role_name)));
                     lines.push("  -Scope $scope".to_string());
                 }
             } else {

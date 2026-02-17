@@ -33,6 +33,21 @@ fn build_client() -> Result<Client, AzureError> {
         .map_err(AzureError::NetworkError)
 }
 
+/// Validate that a subscription ID has a valid GUID-like format
+fn validate_subscription_id(subscription_id: &str) -> Result<(), AzureError> {
+    let is_valid = subscription_id.len() == 36
+        && subscription_id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-');
+    if !is_valid {
+        return Err(AzureError::ParseError(format!(
+            "Invalid subscription ID format: {}",
+            subscription_id
+        )));
+    }
+    Ok(())
+}
+
 /// Generic Azure API GET request
 async fn azure_fetch<T: serde::de::DeserializeOwned>(
     url: &str,
@@ -241,6 +256,7 @@ pub async fn get_role_definitions(
     token: &str,
     subscription_id: &str,
 ) -> Result<Vec<RoleDefinition>, AzureError> {
+    validate_subscription_id(subscription_id)?;
     let url = format!(
         "{}/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions?api-version={}",
         ARM_ENDPOINT, subscription_id, API_AUTHORIZATION
@@ -290,6 +306,7 @@ pub async fn get_role_assignments(
     token: &str,
     subscription_id: &str,
 ) -> Result<Vec<RoleAssignment>, AzureError> {
+    validate_subscription_id(subscription_id)?;
     let url = format!(
         "{}/subscriptions/{}/providers/Microsoft.Authorization/roleAssignments?api-version={}",
         ARM_ENDPOINT, subscription_id, API_AUTHORIZATION
@@ -374,6 +391,7 @@ pub async fn get_key_vaults(
     token: &str,
     subscription_id: &str,
 ) -> Result<Vec<KeyVault>, AzureError> {
+    validate_subscription_id(subscription_id)?;
     let list_url = format!(
         "{}/subscriptions/{}/resources?$filter=resourceType eq 'Microsoft.KeyVault/vaults'&api-version={}",
         ARM_ENDPOINT, subscription_id, API_RESOURCES
