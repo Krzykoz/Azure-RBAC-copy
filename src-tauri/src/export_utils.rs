@@ -329,7 +329,7 @@ pub fn export_to_powershell(
             script.push("#".repeat(80));
             script.push(String::new());
 
-            for item in *items {
+            for item in items.iter() {
                 let lines = generate_identity_script(item, selected_roles, resolved_names);
                 script.extend(lines);
             }
