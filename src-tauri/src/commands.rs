@@ -116,6 +116,39 @@ pub fn run_analysis(
     analysis
 }
 
+/// Analyze a single policy (for parallel per-identity analysis from frontend)
+#[command]
+pub fn analyze_single_policy(
+    policy: AccessPolicyEntry,
+    available_roles: Vec<RoleDefinition>,
+    role_assignments: Vec<RoleAssignment>,
+    vault_id: String,
+    include_custom_roles: bool,
+) -> MigrationAnalysis {
+    let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
+        available_roles.clone()
+    } else {
+        available_roles
+            .iter()
+            .filter(|r| r.properties.role_type == "BuiltInRole")
+            .cloned()
+            .collect()
+    };
+
+    let mut results = analysis_service::analyze_policies(&[policy], &roles_to_analyze);
+    let mut result = results.remove(0);
+
+    let coverage = analysis_service::analyze_existing_coverage(
+        &result.original_policy,
+        &role_assignments,
+        &available_roles,
+        Some(&vault_id),
+    );
+    result.existing_coverage = Some(coverage);
+
+    result
+}
+
 // --- Export Commands ---
 
 #[command]

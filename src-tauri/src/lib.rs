@@ -21,6 +21,7 @@ pub fn run() {
             commands::get_role_assignments,
             commands::resolve_identities,
             commands::run_analysis,
+            commands::analyze_single_policy,
             commands::export_csv,
             commands::export_json,
             commands::export_powershell,

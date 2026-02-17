@@ -168,6 +168,42 @@ export async function runAnalysis(
   });
 }
 
+export async function analyzeSinglePolicy(
+  policy: AccessPolicyEntry,
+  availableRoles: RoleDefinition[],
+  roleAssignments: RoleAssignment[],
+  vaultId: string,
+  includeCustomRoles: boolean
+): Promise<MigrationAnalysis> {
+  const invoke = await getInvoke();
+  if (invoke) {
+    return invoke('analyze_single_policy', {
+      policy,
+      availableRoles,
+      roleAssignments,
+      vaultId,
+      includeCustomRoles,
+    });
+  }
+  // Fallback to browser-based analysis
+  const { analyzePolicies, analyzeExistingCoverage } = await import(
+    '../services/analysisService'
+  );
+  const rolesToAnalyze = includeCustomRoles
+    ? availableRoles
+    : availableRoles.filter((r) => r.properties.type === 'BuiltInRole');
+
+  const analysis = analyzePolicies([policy], rolesToAnalyze);
+  const a = analysis[0];
+  const coverage = analyzeExistingCoverage(
+    a.originalPolicy,
+    roleAssignments,
+    availableRoles,
+    vaultId
+  );
+  return { ...a, existingCoverage: coverage };
+}
+
 // --- Export Commands ---
 
 export type ExportFormat = 'csv' | 'json' | 'powershell';
