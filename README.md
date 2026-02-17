@@ -1,9 +1,11 @@
 # Azure Key Vault RBAC Migrator
 
-A browser‑only tool that helps you migrate Azure Key Vault access policies to modern RBAC role mappings. The app runs entirely in the client, never stores tokens, and provides visual analysis of permissions.
+A **Tauri desktop application** that helps you migrate Azure Key Vault access policies to modern RBAC role mappings. All business logic runs in a **Rust backend** for performance and security, with a React frontend for the UI.
 
 ## Overview
 
+- **Desktop application** – Built with [Tauri](https://tauri.app/) for native performance with a small binary size.
+- **Rust backend** – All Azure API calls, token handling, RBAC analysis, and export generation run in Rust.
 - **Token‑based authentication** – Paste Azure CLI tokens (Management and optional Graph) directly.
 - **Multi‑strategy analysis** – Three weighted greedy algorithms:
   - **Minimize Excess** – Strict, avoids unnecessary permissions.
@@ -11,12 +13,17 @@ A browser‑only tool that helps you migrate Azure Key Vault access policies to 
   - **Max Coverage** – Prioritises full permission coverage.
 - **Export results** – Download analysis as CSV, JSON, or PowerShell script.
 - **Dark / Light mode** – Tailwind‑based theming with enhanced contrast for readability.
+- **Browser fallback** – The frontend can also run in dev mode without Tauri, falling back to browser‑based implementations.
 
 ## Prerequisites
 
+- [Rust](https://www.rust-lang.org/tools/install) (1.70+ recommended)
+- [Node.js](https://nodejs.org/) (v18+)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) installed.
-- Access to Azure subscriptions with Key Vaults.
-- (Optional) Graph permissions to resolve identity names.
+- System dependencies for Tauri:
+  - **Linux**: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `libsoup-3.0-dev`
+  - **macOS**: Xcode Command Line Tools
+  - **Windows**: Microsoft Visual Studio C++ Build Tools, WebView2
 
 ## Setup
 
@@ -25,22 +32,20 @@ A browser‑only tool that helps you migrate Azure Key Vault access policies to 
 git clone git@github.com:Krzykoz/Azure-RBAC-Migration-Tool.git
 cd Azure-RBAC-Migration-Tool
 
-# Install dependencies
+# Install frontend dependencies
 npm install
 
-# Run development server
-npm run dev
+# Run in development mode (starts Vite + Tauri together)
+npm run tauri:dev
 ```
-
-The app will be available at `http://localhost:3000` (Vite default).
 
 ## Build for Production
 
 ```bash
-npm run build
+npm run tauri:build
 ```
 
-The production bundle is emitted to the `dist` folder, which is already ignored via `.gitignore`.
+The production binary will be in `src-tauri/target/release/`.
 
 ## Usage
 
@@ -60,57 +65,58 @@ The production bundle is emitted to the `dist` folder, which is already ignored 
 ## Architecture
 
 ```
-src/
-├─ components/               # React UI components
-│   ├─ Dashboard.tsx          # Main workspace
-│   ├─ LoginScreen.tsx        # Token entry UI (copy icons centered)
-│   ├─ Header.tsx
-│   ├─ SidePanel.tsx
-│   ├─ AnalysisResults.tsx
-│   ├─ PermissionVisualizer.tsx
-│   ├─ CoverageBanner.tsx
-│   ├─ Icons.tsx
-│   └─ ErrorBoundary.tsx
-├─ services/                 # Azure API wrappers
-│   ├─ azureService.ts
-│   └─ analysisService.ts
-├─ utils/                    # Helper utilities
-│   ├─ tokenUtils.ts          # JWT decode & username extraction
-│   └─ exportUtils.ts         # CSV/JSON/PowerShell export
-├─ assets/                   # Static files (CSV mapping)
-├─ types.ts
-├─ App.tsx                   # Root component
-└─ vite-env.d.ts             # TypeScript typings for Vite globals (optional)
+├── src/                         # React frontend (Vite + TypeScript)
+│   ├── components/              # React UI components
+│   ├── hooks/                   # React hooks for state management
+│   ├── services/
+│   │   ├── tauriBridge.ts       # IPC bridge to Rust backend (with browser fallback)
+│   │   ├── azureService.ts      # Browser-based Azure API (fallback)
+│   │   └── analysisService.ts   # Browser-based analysis (fallback)
+│   ├── utils/                   # Helper utilities
+│   ├── assets/                  # Static files (CSV mapping)
+│   ├── types.ts
+│   └── App.tsx
+│
+├── src-tauri/                   # Rust backend (Tauri)
+│   ├── src/
+│   │   ├── main.rs              # Application entry point
+│   │   ├── lib.rs               # Tauri plugin registration
+│   │   ├── commands.rs          # Tauri IPC command handlers
+│   │   ├── azure_service.rs     # Azure REST API client (reqwest)
+│   │   ├── analysis_service.rs  # RBAC analysis engine
+│   │   ├── token_utils.rs       # JWT decoding
+│   │   ├── export_utils.rs      # CSV/JSON/PowerShell generation
+│   │   ├── constants.rs         # Configuration constants
+│   │   └── types.rs             # Shared type definitions
+│   ├── Cargo.toml
+│   └── tauri.conf.json
 ```
 
 ## How It Works
 
-1. **Data fetching** – Retrieves subscriptions, vaults, role definitions, and access policies via Azure ARM APIs.
-2. **Mapping** – Loads `AcessPolicyRBACMapping.csv` to map legacy permissions to RBAC data actions.
-3. **Analysis** – Runs three greedy algorithms to propose optimal role sets.
-4. **Scoring** – Calculates confidence scores based on coverage and excess permissions.
-5. **Presentation** – Visual breakdowns with charts, tooltips, and export options.
+1. **Data fetching** – The Rust backend retrieves subscriptions, vaults, role definitions, and access policies via Azure ARM APIs using `reqwest`.
+2. **Mapping** – The `AcessPolicyRBACMapping.csv` is embedded at compile time and parsed to map legacy permissions to RBAC data actions.
+3. **Analysis** – Three weighted greedy algorithms run in Rust to propose optimal role sets.
+4. **Scoring** – Confidence scores are calculated based on coverage and excess permissions.
+5. **Presentation** – The React frontend displays visual breakdowns with charts, tooltips, and export options.
+6. **IPC** – All communication between frontend and backend uses Tauri's type-safe `invoke()` mechanism.
 
 ## Security
 
-- Tokens are kept **in memory only**; never persisted or sent to a server.
-- No backend; all processing occurs client‑side.
-- The app does not transmit any data outside the browser.
-
-## Troubleshooting
-
-- **Token errors** – Ensure you use the correct token command for each field.
-- **Expired tokens** – Tokens expire after ~1 hour; generate a new one.
-- **GUIDs instead of names** – Provide the optional Graph token.
-- **Build issues** – Run `npm install`; delete `node_modules` and `package-lock.json` then reinstall if problems persist.
+- Tokens are kept **in memory only**; never persisted to disk.
+- All Azure API calls are made from the Rust backend, not from the webview.
+- The app uses a strict Content Security Policy (CSP).
+- No data is transmitted outside the app except to Azure APIs.
 
 ## Technologies
 
-- **React 19**
-- **TypeScript**
-- **Vite**
-- **Tailwind CSS**
-- **Recharts**
+- **Tauri 2** – Desktop application framework
+- **Rust** – Backend business logic
+- **React 19** – Frontend UI
+- **TypeScript** – Frontend type safety
+- **Vite** – Frontend build tool
+- **Tailwind CSS** – Styling
+- **Recharts** – Data visualization
 
 ## License
 

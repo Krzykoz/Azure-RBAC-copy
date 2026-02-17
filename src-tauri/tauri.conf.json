@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicbarker/tauri/main/crates/tauri-config-schema/schema.json",
+  "productName": "Azure Key Vault RBAC Migrator",
+  "version": "0.1.0",
+  "identifier": "com.keyvault.rbac-migrator",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Azure Key Vault RBAC Migrator",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://management.azure.com https://graph.microsoft.com ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self' data:"
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

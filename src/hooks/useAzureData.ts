@@ -12,8 +12,8 @@ import {
     getKeyVaults,
     getRoleDefinitions,
     getRoleAssignments,
-    resolveBatchIdentities,
-} from '../services/azureService';
+    resolveIdentities as resolveBatchIdentities,
+} from '../services/tauriBridge';
 
 interface UseAzureDataProps {
     armToken: string;

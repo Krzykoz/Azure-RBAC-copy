@@ -7,7 +7,7 @@ import {
     MigrationStatus,
     IdentityType,
 } from '../types';
-import { analyzePolicies, analyzeExistingCoverage } from '../services/analysisService';
+import { runAnalysis as runAnalysisBridge } from '../services/tauriBridge';
 import { STRATEGY_PRIORITY } from '../constants';
 
 interface UseAnalysisProps {
@@ -80,47 +80,35 @@ export const useAnalysis = ({
     const runAnalysis = useCallback(async () => {
         if (!selectedVault) return;
 
-        // Run analysis (using setTimeout to allow UI to update)
-        return new Promise<void>((resolve) => {
-            setTimeout(() => {
-                const analysis = analyzePolicies(selectedVault.accessPolicies, rolesToAnalyze);
+        const enhancedAnalysis = await runAnalysisBridge(
+            selectedVault.accessPolicies,
+            rolesToAnalyze,
+            roleAssignments,
+            selectedVault.id,
+            includeCustomRoles,
+        );
 
-                // Enhance with existing coverage check
-                const enhancedAnalysis = analysis.map((a) => {
-                    const coverage = analyzeExistingCoverage(
-                        a.originalPolicy,
-                        roleAssignments,
-                        availableRoles,
-                        selectedVault.id
-                    );
-                    return { ...a, existingCoverage: coverage };
-                });
+        setResults(enhancedAnalysis);
 
-                setResults(enhancedAnalysis);
-
-                // Set default strategy selections
-                const defaults: Record<string, number> = {};
-                enhancedAnalysis.forEach((a) => {
-                    defaults[a.originalPolicy.objectId] = findBestStrategyIndex(a.recommendations);
-                });
-                setSelectedRoles(defaults);
-
-                // Initialize export selection (all except Unknown type)
-                const exportIds = new Set<string>();
-                enhancedAnalysis.forEach((a) => {
-                    const resolvedType = resolvedNames[a.originalPolicy.objectId]?.type;
-                    const policyType = a.originalPolicy.type;
-                    const type = resolvedType || policyType || 'Unknown';
-                    if (type !== 'Unknown') {
-                        exportIds.add(a.originalPolicy.objectId);
-                    }
-                });
-                setSelectedForExport(exportIds);
-
-                resolve();
-            }, 100);
+        // Set default strategy selections
+        const defaults: Record<string, number> = {};
+        enhancedAnalysis.forEach((a) => {
+            defaults[a.originalPolicy.objectId] = findBestStrategyIndex(a.recommendations);
         });
-    }, [selectedVault, rolesToAnalyze, roleAssignments, availableRoles, resolvedNames]);
+        setSelectedRoles(defaults);
+
+        // Initialize export selection (all except Unknown type)
+        const exportIds = new Set<string>();
+        enhancedAnalysis.forEach((a) => {
+            const resolvedType = resolvedNames[a.originalPolicy.objectId]?.type;
+            const policyType = a.originalPolicy.type;
+            const type = resolvedType || policyType || 'Unknown';
+            if (type !== 'Unknown') {
+                exportIds.add(a.originalPolicy.objectId);
+            }
+        });
+        setSelectedForExport(exportIds);
+    }, [selectedVault, rolesToAnalyze, roleAssignments, includeCustomRoles, resolvedNames]);
 
     const clearResults = useCallback(() => {
         setResults([]);

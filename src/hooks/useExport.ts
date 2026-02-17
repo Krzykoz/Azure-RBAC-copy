@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react';
 import { MigrationAnalysis, IdentityType } from '../types';
-import { exportToCSV, exportToJSON, exportToPowerShell, downloadFile } from '../utils/exportUtils';
+import { exportData, ExportFormat } from '../services/tauriBridge';
+import { downloadFile } from '../utils/exportUtils';
 
-export type ExportFormat = 'csv' | 'json' | 'powershell';
+export type { ExportFormat } from '../services/tauriBridge';
 
 interface UseExportProps {
     results: MigrationAnalysis[];
@@ -36,43 +37,50 @@ export const useExport = ({
 
     const handleExport = useCallback(
         (format: ExportFormat): boolean => {
-            // Filter results by selection
-            const filteredResults = results.filter((r) =>
-                selectedForExport.has(r.originalPolicy.objectId)
-            );
+            const selectedForExportArray = Array.from(selectedForExport);
 
-            if (filteredResults.length === 0) {
+            if (selectedForExportArray.length === 0) {
                 alert('Please select at least one identity to export.');
                 return false;
             }
 
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
 
-            switch (format) {
-                case 'csv': {
-                    const csv = exportToCSV(filteredResults, selectedRoles, resolvedNames);
-                    downloadFile(csv, `${vaultName}-migration-${timestamp}.csv`, 'text/csv');
-                    break;
-                }
-                case 'json': {
-                    const json = exportToJSON(filteredResults, selectedRoles, resolvedNames);
-                    downloadFile(json, `${vaultName}-migration-${timestamp}.json`, 'application/json');
-                    break;
-                }
-                case 'powershell': {
-                    const ps = exportToPowerShell(
-                        filteredResults,
+            const doExport = async () => {
+                try {
+                    const content = await exportData(
+                        format,
+                        results,
                         selectedRoles,
                         resolvedNames,
+                        selectedForExportArray,
                         vaultName,
                         subscriptionId,
                         vaultResourceId
                     );
-                    downloadFile(ps, `${vaultName}-migration-${timestamp}.ps1`, 'text/plain');
-                    break;
-                }
-            }
 
+                    const mimeTypes: Record<ExportFormat, string> = {
+                        csv: 'text/csv',
+                        json: 'application/json',
+                        powershell: 'text/plain',
+                    };
+                    const extensions: Record<ExportFormat, string> = {
+                        csv: 'csv',
+                        json: 'json',
+                        powershell: 'ps1',
+                    };
+
+                    downloadFile(
+                        content,
+                        `${vaultName}-migration-${timestamp}.${extensions[format]}`,
+                        mimeTypes[format]
+                    );
+                } catch (err) {
+                    console.error('Export failed:', err);
+                }
+            };
+
+            doExport();
             setShowExportMenu(false);
             return true;
         },

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { validateToken } from '../services/azureService';
+import { validateToken } from '../services/tauriBridge';
 import { WifiOffIcon } from './Icons';
 import { CopyableCommand } from './ui';
 
