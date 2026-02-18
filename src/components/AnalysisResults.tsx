@@ -340,6 +340,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
         return 'some';
     }, [results, selectedForExport]);
 
+    // Calculate selection state for a specific category (called per-render with different groupData)
     const calculateCategorySelectionState = useCallback((groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
         const selectedCount = ids.filter(id => selectedForExport.has(id)).length;

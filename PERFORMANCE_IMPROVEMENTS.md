@@ -58,30 +58,41 @@ const toggleSuggestion = React.useCallback((id: string) => {
 
 **Problem**: Export selection was being recalculated for ALL identities every time `resolvedNames` changed, even for identities already processed.
 
-**Solution**: Implemented incremental update logic:
+**Solution**: Implemented ref-based tracking to prevent feedback loops:
 ```typescript
-// Only update if there are new resolved names
-const exportIds = new Set(selectedForExport);
-let hasChanges = false;
+// Track which identities have been processed for export selection
+const processedForExportRef = useRef<Set<string>>(new Set());
+
+// Only update if there are new resolved names that haven't been processed
+const newExportIds: string[] = [];
 
 results.forEach((r) => {
     const objectId = r.originalPolicy.objectId;
-    if (exportIds.has(objectId)) return; // Skip already processed
+    // Skip if already processed
+    if (processedForExportRef.current.has(objectId)) return;
     
-    // Process only new identities
-    if (shouldExport(r)) {
-        exportIds.add(objectId);
-        hasChanges = true;
+    const resolvedType = resolvedNames[objectId]?.type;
+    const policyType = r.originalPolicy.type;
+    const type = resolvedType || policyType || 'Unknown';
+    
+    if (type !== 'Unknown') {
+        newExportIds.push(objectId);
+        processedForExportRef.current.add(objectId);
     }
 });
 
-if (hasChanges) {
-    setSelectedForExport(exportIds);
+if (newExportIds.length > 0) {
+    setSelectedForExport(prev => {
+        const next = new Set(prev);
+        newExportIds.forEach(id => next.add(id));
+        return next;
+    });
 }
 ```
 
 **Impact**:
 - Prevents cascading re-renders during identity resolution
+- Avoids feedback loops by not depending on `selectedForExport`
 - O(n) → O(k) where k is number of NEW resolved identities
 - Smoother UI during batch identity resolution
 
