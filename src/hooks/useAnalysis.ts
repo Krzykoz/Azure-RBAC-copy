@@ -7,7 +7,7 @@ import {
     MigrationStatus,
     IdentityType,
 } from '../types';
-import { analyzeSinglePolicy } from '../services/tauriBridge';
+import { runAnalysis as runAnalysisBridge } from '../services/tauriBridge';
 import { STRATEGY_PRIORITY } from '../constants';
 
 interface UseAnalysisProps {
@@ -67,7 +67,8 @@ const findBestStrategyIndex = (recommendations: MigrationAnalysis['recommendatio
 
 /**
  * Hook for managing RBAC analysis state and execution.
- * Analyzes each identity in parallel and streams results as they complete.
+ * Sends all policies in a single batched IPC call to the Rust backend,
+ * which uses Rayon for true multi-core parallelism internally.
  */
 export const useAnalysis = ({
     selectedVault,
@@ -93,10 +94,10 @@ export const useAnalysis = ({
         const policies = selectedVault.accessPolicies;
         const total = policies.length;
 
-        // Initialize progress tracking
+        // Initialize progress — mark all as analyzing (batch runs all at once)
         const identities: Record<string, 'pending' | 'analyzing' | 'done'> = {};
         policies.forEach((p) => {
-            identities[p.objectId] = 'pending';
+            identities[p.objectId] = 'analyzing';
         });
         setProgress({ total, completed: 0, identities: { ...identities } });
 
@@ -105,73 +106,50 @@ export const useAnalysis = ({
         setSelectedRoles({});
         setSelectedForExport(new Set());
 
-        // Launch all analyses in parallel — each identity gets its own IPC call
-        const promises = policies.map(async (policy) => {
-            // Mark as analyzing
-            setProgress((prev) => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    identities: { ...prev.identities, [policy.objectId]: 'analyzing' },
-                };
+        try {
+            // Single IPC call — Rust parallelizes internally via Rayon
+            const enhancedAnalysis = await runAnalysisBridge(
+                policies,
+                rolesToAnalyze,
+                roleAssignments,
+                selectedVault.id,
+                includeCustomRoles,
+            );
+
+            setResults(enhancedAnalysis);
+
+            // Set default strategy selections
+            const defaults: Record<string, number> = {};
+            enhancedAnalysis.forEach((a) => {
+                defaults[a.originalPolicy.objectId] = findBestStrategyIndex(a.recommendations);
             });
+            setSelectedRoles(defaults);
 
-            try {
-                const result = await analyzeSinglePolicy(
-                    policy,
-                    rolesToAnalyze,
-                    roleAssignments,
-                    selectedVault.id,
-                    includeCustomRoles,
-                );
-
-                const bestIdx = findBestStrategyIndex(result.recommendations);
-
-                // Use functional state updates to avoid race conditions
-                setResults((prev) => [...prev, result]);
-                setSelectedRoles((prev) => ({
-                    ...prev,
-                    [result.originalPolicy.objectId]: bestIdx,
-                }));
-
-                // Update export selection
-                const resolvedType = resolvedNames[result.originalPolicy.objectId]?.type;
-                const policyType = result.originalPolicy.type;
+            // Initialize export selection (all except Unknown type)
+            const exportIds = new Set<string>();
+            enhancedAnalysis.forEach((a) => {
+                const resolvedType = resolvedNames[a.originalPolicy.objectId]?.type;
+                const policyType = a.originalPolicy.type;
                 const type = resolvedType || policyType || 'Unknown';
                 if (type !== 'Unknown') {
-                    setSelectedForExport((prev) => {
-                        const next = new Set(prev);
-                        next.add(result.originalPolicy.objectId);
-                        return next;
-                    });
+                    exportIds.add(a.originalPolicy.objectId);
                 }
+            });
+            setSelectedForExport(exportIds);
 
-                // Mark as done using functional update for accurate count
-                setProgress((prev) => {
-                    if (!prev) return prev;
-                    return {
-                        ...prev,
-                        completed: prev.completed + 1,
-                        identities: { ...prev.identities, [policy.objectId]: 'done' },
-                    };
-                });
-            } catch (err) {
-                console.error(`Analysis failed for ${policy.objectId}:`, err);
-                setProgress((prev) => {
-                    if (!prev) return prev;
-                    return {
-                        ...prev,
-                        completed: prev.completed + 1,
-                        identities: { ...prev.identities, [policy.objectId]: 'done' },
-                    };
-                });
-            }
-        });
-
-        await Promise.all(promises);
-
-        // Clear progress after completion
-        setProgress(null);
+            // Mark all done
+            const doneIdentities: Record<string, 'pending' | 'analyzing' | 'done'> = {};
+            policies.forEach((p) => {
+                doneIdentities[p.objectId] = 'done';
+            });
+            setProgress({ total, completed: total, identities: doneIdentities });
+        } catch (err) {
+            console.error('Analysis failed:', err);
+            throw err;
+        } finally {
+            // Clear progress after a brief delay so user sees completion
+            setTimeout(() => setProgress(null), 500);
+        }
     }, [selectedVault, rolesToAnalyze, roleAssignments, includeCustomRoles, resolvedNames]);
 
     const clearResults = useCallback(() => {

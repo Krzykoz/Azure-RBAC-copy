@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+
+use rayon::prelude::*;
 
 use crate::constants::*;
 use crate::types::*;
@@ -8,6 +11,12 @@ const RBAC_MAPPING_CSV: &str = include_str!("../../src/assets/AcessPolicyRBACMap
 
 /// Parsed permission mapping: category -> (action -> [rbac_actions])
 type PermissionMap = HashMap<String, HashMap<String, Vec<String>>>;
+
+/// Lazily parsed permission map — computed once on first access
+static PERM_MAP: LazyLock<PermissionMap> = LazyLock::new(parse_permission_map);
+/// Lazily computed set of all known RBAC actions
+static KNOWN_ACTIONS: LazyLock<HashSet<String>> =
+    LazyLock::new(|| all_known_rbac_actions(&PERM_MAP));
 
 fn parse_permission_map() -> PermissionMap {
     let mut map: PermissionMap = HashMap::new();
@@ -67,19 +76,8 @@ fn all_known_rbac_actions(perm_map: &PermissionMap) -> HashSet<String> {
     actions
 }
 
-fn escape_regex(s: &str) -> String {
-    let special_chars = r".*+?^${}()|[]\";
-    let mut result = String::with_capacity(s.len() * 2);
-    for c in s.chars() {
-        if special_chars.contains(c) {
-            result.push('\\');
-        }
-        result.push(c);
-    }
-    result
-}
-
-/// Check if a role action matches a required action (supports wildcards)
+/// Check if a role action matches a required action (supports wildcards).
+/// Uses simple string matching for common patterns to avoid regex overhead.
 fn action_matches(role_action: &str, required_action: &str) -> bool {
     let r = role_action.to_lowercase();
     let req = required_action.to_lowercase();
@@ -88,20 +86,17 @@ fn action_matches(role_action: &str, required_action: &str) -> bool {
         return true;
     }
 
+    // Fast path: prefix/* pattern (most common wildcard)
     if r.ends_with("/*") {
-        let prefix = &r[..r.len() - 2];
+        let prefix = &r[..r.len() - 1]; // keep the trailing /
         return req.starts_with(prefix);
     }
 
+    // Fast path: single * in the middle — split and check prefix/suffix
     if r.contains('*') {
-        let pattern = r
-            .split('*')
-            .map(|part| escape_regex(part))
-            .collect::<Vec<_>>()
-            .join(".*");
-        let pattern = format!("^{}$", pattern);
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            return re.is_match(&req);
+        let parts: Vec<&str> = r.splitn(2, '*').collect();
+        if parts.len() == 2 {
+            return req.starts_with(parts[0]) && req.ends_with(parts[1]);
         }
     }
 
@@ -131,7 +126,6 @@ fn get_required_actions(
             for p in *perms {
                 let perm_key = p.to_lowercase();
                 if perm_key == "all" || perm_key == "*" {
-                    // Map to ALL permissions in this category
                     for rbac_list in cat_map.values() {
                         for action in rbac_list {
                             actions.insert(action.clone());
@@ -149,18 +143,25 @@ fn get_required_actions(
     actions
 }
 
+/// Precomputed coverage for a single role: (covered actions, excess actions)
+struct RoleCoverage {
+    covered: HashSet<String>,
+    excess: HashSet<String>,
+}
+
 /// Calculate coverage of a role against required permissions
 fn calculate_coverage(
     required: &HashSet<String>,
     role: &RoleDefinition,
     known_actions: &HashSet<String>,
-) -> (HashSet<String>, HashSet<String>) {
+) -> RoleCoverage {
     let mut covered = HashSet::new();
     let mut excess = HashSet::new();
 
     for p in &role.properties.permissions {
         for da in &p.data_actions {
-            if !da.to_lowercase().contains("microsoft.keyvault") {
+            let da_lower = da.to_lowercase();
+            if !da_lower.contains("microsoft.keyvault") {
                 continue;
             }
 
@@ -176,24 +177,17 @@ fn calculate_coverage(
                         }
                     }
                 }
-            } else {
-                let matched = required.iter().find(|req| {
-                    req.to_lowercase() == da.to_lowercase()
-                });
-
-                if let Some(matched_req) = matched {
-                    covered.insert(matched_req.clone());
-                } else {
-                    let da_lower = da.to_lowercase();
-                    if known_actions.contains(&da_lower) || da_lower.ends_with("/action") {
-                        excess.insert(da.clone());
-                    }
-                }
+            } else if let Some(matched_req) = required.iter().find(|req| {
+                req.to_lowercase() == da_lower
+            }) {
+                covered.insert(matched_req.clone());
+            } else if known_actions.contains(&da_lower) || da_lower.ends_with("/action") {
+                excess.insert(da.clone());
             }
         }
     }
 
-    (covered, excess)
+    RoleCoverage { covered, excess }
 }
 
 /// Calculate confidence score
@@ -235,48 +229,47 @@ fn merge_duplicate_strategies(strategies: Vec<SuggestedRole>) -> Vec<SuggestedRo
     unique_strategies
 }
 
-/// Run weighted analysis for a single strategy
+/// Run weighted analysis for a single strategy, using precomputed per-role
+/// coverage to avoid redundant computation in the combination search.
 fn run_weighted_analysis(
     required: &HashSet<String>,
+    precomputed: &[RoleCoverage],
     roles: &[RoleDefinition],
     config: &StrategyConfig,
-    known_actions: &HashSet<String>,
 ) -> SuggestedRole {
-    let mut best_combination: Vec<&RoleDefinition> = Vec::new();
+    let mut best_combination: Vec<usize> = Vec::new();
     let mut best_score = f64::NEG_INFINITY;
     let mut best_covered: HashSet<String> = HashSet::new();
     let mut best_excess: HashSet<String> = HashSet::new();
 
-    // Filter to roles that cover at least one required permission
-    let useful_roles: Vec<&RoleDefinition> = roles
+    // Filter to indices of roles that cover at least one required permission
+    let useful_indices: Vec<usize> = precomputed
         .iter()
-        .filter(|r| {
-            let (covered, _) = calculate_coverage(required, r, known_actions);
-            !covered.is_empty()
-        })
+        .enumerate()
+        .filter(|(_, cov)| !cov.covered.is_empty())
+        .map(|(i, _)| i)
         .collect();
 
-    // Generate and evaluate combinations
-    fn generate_combinations<'a>(
+    // Generate and evaluate combinations using precomputed coverage
+    fn generate_combinations(
         start_idx: usize,
-        current_combo: &mut Vec<&'a RoleDefinition>,
-        useful_roles: &[&'a RoleDefinition],
-        required: &HashSet<String>,
+        current_combo: &mut Vec<usize>,
+        useful_indices: &[usize],
+        precomputed: &[RoleCoverage],
         config: &StrategyConfig,
-        known_actions: &HashSet<String>,
         best_score: &mut f64,
-        best_combination: &mut Vec<&'a RoleDefinition>,
+        best_combination: &mut Vec<usize>,
         best_covered: &mut HashSet<String>,
         best_excess: &mut HashSet<String>,
     ) {
         if !current_combo.is_empty() {
+            // Union precomputed coverage — no per-role recalculation
             let mut combined_covered = HashSet::new();
             let mut combined_excess = HashSet::new();
 
-            for role in current_combo.iter() {
-                let (covered, excess) = calculate_coverage(required, role, known_actions);
-                combined_covered.extend(covered);
-                combined_excess.extend(excess);
+            for &idx in current_combo.iter() {
+                combined_covered.extend(precomputed[idx].covered.iter().cloned());
+                combined_excess.extend(precomputed[idx].excess.iter().cloned());
             }
 
             let score = combined_covered.len() as f64 * config.weight_coverage
@@ -295,15 +288,14 @@ fn run_weighted_analysis(
             return;
         }
 
-        for i in start_idx..useful_roles.len() {
-            current_combo.push(useful_roles[i]);
+        for i in start_idx..useful_indices.len() {
+            current_combo.push(useful_indices[i]);
             generate_combinations(
                 i + 1,
                 current_combo,
-                useful_roles,
-                required,
+                useful_indices,
+                precomputed,
                 config,
-                known_actions,
                 best_score,
                 best_combination,
                 best_covered,
@@ -313,14 +305,13 @@ fn run_weighted_analysis(
         }
     }
 
-    let mut current_combo: Vec<&RoleDefinition> = Vec::new();
+    let mut current_combo: Vec<usize> = Vec::new();
     generate_combinations(
         0,
         &mut current_combo,
-        &useful_roles,
-        required,
+        &useful_indices,
+        precomputed,
         config,
-        known_actions,
         &mut best_score,
         &mut best_combination,
         &mut best_covered,
@@ -346,13 +337,10 @@ fn run_weighted_analysis(
 
     let role_breakdown: Vec<RoleBreakdown> = best_combination
         .iter()
-        .map(|role| {
-            let (covered, excess) = calculate_coverage(required, role, known_actions);
-            RoleBreakdown {
-                role_name: role.properties.role_name.clone(),
-                covered: covered.into_iter().collect(),
-                excess: excess.into_iter().collect(),
-            }
+        .map(|&idx| RoleBreakdown {
+            role_name: roles[idx].properties.role_name.clone(),
+            covered: precomputed[idx].covered.iter().cloned().collect(),
+            excess: precomputed[idx].excess.iter().cloned().collect(),
         })
         .collect();
 
@@ -364,7 +352,7 @@ fn run_weighted_analysis(
 
     let role_names: Vec<String> = best_combination
         .iter()
-        .map(|r| r.properties.role_name.clone())
+        .map(|&idx| roles[idx].properties.role_name.clone())
         .collect();
 
     SuggestedRole {
@@ -380,16 +368,18 @@ fn run_weighted_analysis(
     }
 }
 
-/// Analyze policies and return migration analysis results
+/// Analyze policies and return migration analysis results.
+/// Uses Rayon for parallel iteration across policies and shared
+/// precomputed data to eliminate redundant work.
 pub fn analyze_policies(
     policies: &[AccessPolicyEntry],
     available_roles: &[RoleDefinition],
 ) -> Vec<MigrationAnalysis> {
-    let perm_map = parse_permission_map();
-    let known_actions = all_known_rbac_actions(&perm_map);
+    let perm_map = &*PERM_MAP;
+    let known_actions = &*KNOWN_ACTIONS;
 
-    // Filter roles to those relevant to Key Vault
-    let kv_roles: Vec<&RoleDefinition> = available_roles
+    // Filter roles to those relevant to Key Vault (done once)
+    let kv_roles: Vec<RoleDefinition> = available_roles
         .iter()
         .filter(|r| {
             r.properties.permissions.iter().any(|p| {
@@ -398,23 +388,29 @@ pub fn analyze_policies(
                     .any(|da| da.to_lowercase().contains("microsoft.keyvault"))
             })
         })
+        .cloned()
         .collect();
 
-    let kv_roles_owned: Vec<RoleDefinition> = kv_roles.into_iter().cloned().collect();
-
+    // Use Rayon to parallelize across policies
     policies
-        .iter()
+        .par_iter()
         .map(|policy| {
-            let required_actions = get_required_actions(policy, &perm_map);
+            let required_actions = get_required_actions(policy, perm_map);
+
+            // Precompute per-role coverage ONCE for this policy
+            let precomputed: Vec<RoleCoverage> = kv_roles
+                .iter()
+                .map(|role| calculate_coverage(&required_actions, role, known_actions))
+                .collect();
 
             let all_recommendations: Vec<SuggestedRole> = STRATEGIES
                 .iter()
                 .map(|strategy| {
                     run_weighted_analysis(
                         &required_actions,
-                        &kv_roles_owned,
+                        &precomputed,
+                        &kv_roles,
                         strategy,
-                        &known_actions,
                     )
                 })
                 .collect();
@@ -437,9 +433,9 @@ pub fn analyze_existing_coverage(
     available_roles: &[RoleDefinition],
     scope_filter: Option<&str>,
 ) -> ExistingCoverageResult {
-    let perm_map = parse_permission_map();
-    let known_actions = all_known_rbac_actions(&perm_map);
-    let required_actions = get_required_actions(policy, &perm_map);
+    let perm_map = &*PERM_MAP;
+    let known_actions = &*KNOWN_ACTIONS;
+    let required_actions = get_required_actions(policy, perm_map);
 
     let user_assignments: Vec<&RoleAssignment> = assignments
         .iter()
@@ -483,21 +479,20 @@ pub fn analyze_existing_coverage(
             }
             processed_roles.insert(role_def.properties.role_name.clone());
 
-            let (c, e) = calculate_coverage(&required_actions, role_def, &known_actions);
-            let role_covered: HashSet<String> = c.iter().cloned().collect();
+            let cov = calculate_coverage(&required_actions, role_def, known_actions);
 
-            for perm in &c {
+            for perm in &cov.covered {
                 covered.insert(perm.clone());
             }
-            for perm in &e {
+            for perm in &cov.excess {
                 excess.insert(perm.clone());
             }
 
-            if !role_covered.is_empty() {
+            if !cov.covered.is_empty() {
                 role_matches.push(RoleBreakdown {
                     role_name: role_def.properties.role_name.clone(),
-                    covered: role_covered.into_iter().collect(),
-                    excess: e.into_iter().collect(),
+                    covered: cov.covered.into_iter().collect(),
+                    excess: cov.excess.into_iter().collect(),
                 });
             }
         }

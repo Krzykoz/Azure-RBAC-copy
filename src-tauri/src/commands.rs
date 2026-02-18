@@ -82,6 +82,9 @@ pub async fn resolve_identities(
 
 // --- Analysis Commands ---
 
+/// Batched analysis: all policies analyzed in parallel using Rayon inside
+/// a single spawn_blocking call. Eliminates per-identity IPC serialization
+/// overhead while keeping the main thread free.
 #[command]
 pub async fn run_analysis(
     policies: Vec<AccessPolicyEntry>,
@@ -120,9 +123,7 @@ pub async fn run_analysis(
     .map_err(|e| e.to_string())
 }
 
-/// Analyze a single policy (for parallel per-identity analysis from frontend).
-/// Uses spawn_blocking to offload CPU work to the thread pool, keeping the
-/// main thread free for UI rendering and enabling true parallelism.
+/// Analyze a single policy (kept for compatibility / small batch sizes).
 #[command]
 pub async fn analyze_single_policy(
     policy: AccessPolicyEntry,
