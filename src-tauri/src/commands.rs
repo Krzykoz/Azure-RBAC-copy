@@ -94,17 +94,20 @@ pub async fn run_analysis(
     include_custom_roles: bool,
 ) -> Result<Vec<MigrationAnalysis>, String> {
     tokio::task::spawn_blocking(move || {
-        let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
-            available_roles.clone()
+        // Avoid cloning when using all roles - use reference filtering instead
+        let filtered_roles: Vec<RoleDefinition>;
+        let roles_to_analyze: &[RoleDefinition] = if include_custom_roles {
+            &available_roles
         } else {
-            available_roles
+            filtered_roles = available_roles
                 .iter()
                 .filter(|r| r.properties.role_type == "BuiltInRole")
                 .cloned()
-                .collect()
+                .collect();
+            &filtered_roles
         };
 
-        let mut analysis = analysis_service::analyze_policies(&policies, &roles_to_analyze);
+        let mut analysis = analysis_service::analyze_policies(&policies, roles_to_analyze);
 
         // Enhance with existing coverage
         for a in &mut analysis {
@@ -133,17 +136,20 @@ pub async fn analyze_single_policy(
     include_custom_roles: bool,
 ) -> Result<MigrationAnalysis, String> {
     tokio::task::spawn_blocking(move || {
-        let roles_to_analyze: Vec<RoleDefinition> = if include_custom_roles {
-            available_roles.clone()
+        // Avoid cloning when using all roles
+        let filtered_roles: Vec<RoleDefinition>;
+        let roles_to_analyze: &[RoleDefinition] = if include_custom_roles {
+            &available_roles
         } else {
-            available_roles
+            filtered_roles = available_roles
                 .iter()
                 .filter(|r| r.properties.role_type == "BuiltInRole")
                 .cloned()
-                .collect()
+                .collect();
+            &filtered_roles
         };
 
-        let mut results = analysis_service::analyze_policies(&[policy], &roles_to_analyze);
+        let mut results = analysis_service::analyze_policies(&[policy], roles_to_analyze);
         let mut result = results.remove(0);
 
         let coverage = analysis_service::analyze_existing_coverage(

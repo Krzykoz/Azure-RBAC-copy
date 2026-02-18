@@ -70,6 +70,8 @@ function escapeRegExp(string: string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Cache compiled regex patterns to avoid recompilation in hot loops
+const regexCache = new Map<string, RegExp>();
 
 const actionMatches = (roleAction: string, requiredAction: string): boolean => {
   const r = roleAction.toLowerCase();
@@ -82,7 +84,11 @@ const actionMatches = (roleAction: string, requiredAction: string): boolean => {
   }
   // Handle specific wildcards like "Microsoft.KeyVault/vaults/secrets/*/action" if they exist
   if (r.includes('*')) {
-    const regex = new RegExp('^' + r.split('*').map(escapeRegExp).join('.*') + '$');
+    let regex = regexCache.get(r);
+    if (!regex) {
+      regex = new RegExp('^' + r.split('*').map(escapeRegExp).join('.*') + '$');
+      regexCache.set(r, regex);
+    }
     return regex.test(req);
   }
   return false;

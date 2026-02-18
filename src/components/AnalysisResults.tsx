@@ -268,30 +268,30 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
         return () => el.removeEventListener('wheel', handleWheel);
     }, []);
 
-    const toggleSuggestion = (id: string) => {
+    const toggleSuggestion = React.useCallback((id: string) => {
         setShowSuggestions(prev => ({
             ...prev,
             [id]: !prev[id]
         }));
-    };
+    }, []);
 
-    const toggleCoverageDetails = (id: string) => {
+    const toggleCoverageDetails = React.useCallback((id: string) => {
         setShowCoverageDetails(prev => ({
             ...prev,
             [id]: !prev[id]
         }));
-    };
+    }, []);
 
     const [showPolicyDetails, setShowPolicyDetails] = React.useState<Record<string, boolean>>({});
-    const togglePolicyDetails = (id: string) => {
+    const togglePolicyDetails = React.useCallback((id: string) => {
         setShowPolicyDetails(prev => ({
             ...prev,
             [id]: !prev[id]
         }));
-    };
+    }, []);
 
     // Selection helpers
-    const toggleItemSelection = (objectId: string) => {
+    const toggleItemSelection = React.useCallback((objectId: string) => {
         setSelectedForExport(prev => {
             const next = new Set(prev);
             if (next.has(objectId)) {
@@ -301,13 +301,13 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             }
             return next;
         });
-    };
+    }, [setSelectedForExport]);
 
-    const toggleCategorySelection = (groupData: MigrationAnalysis[]) => {
+    const toggleCategorySelection = React.useCallback((groupData: MigrationAnalysis[]) => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
-        const allSelected = ids.every(id => selectedForExport.has(id));
-
+        
         setSelectedForExport(prev => {
+            const allSelected = ids.every(id => prev.has(id));
             const next = new Set(prev);
             if (allSelected) {
                 ids.forEach(id => next.delete(id));
@@ -316,40 +316,42 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             }
             return next;
         });
-    };
+    }, [setSelectedForExport]);
 
-    const toggleAllSelection = () => {
-        const allIds = results.map(r => r.originalPolicy.objectId);
-        const allSelected = allIds.every(id => selectedForExport.has(id));
-
+    const toggleAllSelection = React.useCallback(() => {
         setSelectedForExport(prev => {
+            const allIds = results.map(r => r.originalPolicy.objectId);
+            const allSelected = allIds.every(id => prev.has(id));
+            
             if (allSelected) {
                 return new Set();
             } else {
                 return new Set(allIds);
             }
         });
-    };
+    }, [results, setSelectedForExport]);
 
-    const getAllSelectionState = (): 'all' | 'some' | 'none' => {
+    // Memoize selection state calculations to avoid unnecessary filtering on every render
+    const allSelectionState = useMemo((): 'all' | 'some' | 'none' => {
         const allIds = results.map(r => r.originalPolicy.objectId);
         const selectedCount = allIds.filter(id => selectedForExport.has(id)).length;
         if (selectedCount === 0) return 'none';
         if (selectedCount === allIds.length) return 'all';
         return 'some';
-    };
+    }, [results, selectedForExport]);
 
-    const getCategorySelectionState = (groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
+    // Calculate selection state for a specific category (called per-render with different groupData)
+    const calculateCategorySelectionState = useCallback((groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
         const selectedCount = ids.filter(id => selectedForExport.has(id)).length;
         if (selectedCount === 0) return 'none';
         if (selectedCount === ids.length) return 'all';
         return 'some';
-    };
+    }, [selectedForExport]);
 
     const renderIdentityGroup = (title: string, groupData: MigrationAnalysis[], icon: React.ReactNode) => {
         if (groupData.length === 0) return null;
-        const selectionState = getCategorySelectionState(groupData);
+        const selectionState = calculateCategorySelectionState(groupData);
 
         return (
             <React.Fragment>
@@ -656,8 +658,8 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
                     <div className="grid grid-cols-12 gap-4 px-6 py-3 bg-neutral-50 dark:bg-neutral-900/50 border-b border-neutral-200 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-400 uppercase tracking-wider">
                         <div className="col-span-3 flex items-center gap-4">
                             <Checkbox
-                                checked={getAllSelectionState() === 'all'}
-                                indeterminate={getAllSelectionState() === 'some'}
+                                checked={allSelectionState === 'all'}
+                                indeterminate={allSelectionState === 'some'}
                                 onChange={toggleAllSelection}
                             />
                             Identity
