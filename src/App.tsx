@@ -1,11 +1,9 @@
-
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { LoginScreen } from './components/LoginScreen';
 import { Dashboard } from './components/Dashboard';
 import { OfflineInputPage } from './components/OfflineInputPage';
-import { getUserNameFromToken, getTenantIdFromToken } from './utils/tokenUtils';
-import { getTenants } from './services/azureService';
+import { getUserName, getTenantId, getTenants } from './services/tauriBridge';
 import { KeyVault, RoleDefinition } from './types';
 
 function App() {
@@ -17,6 +15,8 @@ function App() {
   // Offline Mode State
   const [isOfflineInput, setIsOfflineInput] = useState(false);
   const [offlineData, setOfflineData] = useState<{ vaults: KeyVault[], roles: RoleDefinition[] } | null>(null);
+
+  const [userName, setUserName] = useState<string | null>(null);
 
   useEffect(() => {
     // Check for saved theme or system preference
@@ -35,15 +35,18 @@ function App() {
   useEffect(() => {
     const fetchOrgName = async () => {
       if (armToken) {
-        const tid = getTenantIdFromToken(armToken);
+        const tid = await getTenantId(armToken);
         if (tid) {
           const tenants = await getTenants(armToken);
           if (tenants[tid]) {
             setOrganizationName(tenants[tid]);
           }
         }
+        const name = await getUserName(armToken);
+        setUserName(name);
       } else {
         setOrganizationName(null);
+        setUserName(null);
       }
     };
     fetchOrgName();
@@ -121,7 +124,7 @@ function App() {
   return (
     <div className="min-h-screen bg-neutral-100 dark:bg-neutral-900 font-sans text-neutral-900 dark:text-neutral-100 transition-colors duration-200">
       <Header
-        user={armToken ? getUserNameFromToken(armToken) : (offlineData ? 'Offline User' : null)}
+        user={armToken ? (userName || 'Azure User') : (offlineData ? 'Offline User' : null)}
         organization={organizationName}
         onLogout={handleLogout}
         theme={theme}

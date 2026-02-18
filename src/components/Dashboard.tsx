@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MigrationStatus, KeyVault, RoleDefinition } from '../types';
-import { useAzureData, useAnalysis, useExport, ExportFormat } from '../hooks';
+import { useAzureData, useAnalysis, useExport, ExportFormat, AnalysisProgress } from '../hooks';
 import { ArrowRightIcon, LoaderIcon, ShieldCheckIcon, CheckCircleIcon, DownloadIcon } from './Icons';
 import { SidePanel } from './SidePanel';
 import { AnalysisResults } from './AnalysisResults';
@@ -44,6 +44,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setSelectedForExport,
     runAnalysis,
     clearResults,
+    progress,
   } = useAnalysis({
     selectedVault,
     availableRoles,
@@ -349,19 +350,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             )}
 
-            {/* Analyzing State */}
+            {/* Analyzing State — shows per-identity progress + streamed results */}
             {status === MigrationStatus.ANALYZING && (
-              <div className="h-full flex flex-col items-center justify-center">
-                <div className="relative w-20 h-20 mb-8">
-                  <div className="absolute inset-0 border-4 border-neutral-200 dark:border-neutral-700 rounded-full"></div>
-                  <div className="absolute inset-0 border-4 border-brand-600 rounded-full border-t-transparent animate-spin"></div>
-                </div>
-                <p className="text-lg font-medium text-neutral-900 dark:text-neutral-200">
-                  Mapping Roles...
-                </p>
-                <p className="text-sm text-neutral-700 dark:text-neutral-400 mt-2 max-w-md text-center">
-                  Applying 3 weighted algorithmic strategies to determine optimal RBAC mappings.
-                </p>
+              <div className="flex flex-col gap-6">
+                {/* Progress Header */}
+                {progress && (
+                  <div className="bg-neutral-50 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-700 rounded p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <LoaderIcon className="animate-spin w-4 h-4 text-brand-600" />
+                        <span className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                          Analyzing Identities
+                        </span>
+                      </div>
+                      <span className="text-sm text-neutral-600 dark:text-neutral-400">
+                        {progress.completed} / {progress.total} complete
+                      </span>
+                    </div>
+                    {/* Overall Progress Bar */}
+                    <div className="w-full bg-neutral-200 dark:bg-neutral-700 rounded-full h-2 mb-3">
+                      <div
+                        className="bg-brand-600 h-2 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${progress.total > 0 ? (progress.completed / progress.total) * 100 : 0}%` }}
+                      />
+                    </div>
+                    {/* Per-Identity Progress */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                      {Object.entries(progress.identities).map(([objectId, state]) => {
+                        const resolved = resolvedNames[objectId];
+                        const label = resolved?.name || `${objectId.substring(0, 8)}…`;
+                        return (
+                          <div
+                            key={objectId}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs truncate ${
+                              state === 'done'
+                                ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                                : state === 'analyzing'
+                                ? 'bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300'
+                                : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400'
+                            }`}
+                            title={objectId}
+                          >
+                            {state === 'analyzing' && (
+                              <LoaderIcon className="animate-spin w-3 h-3 flex-shrink-0" />
+                            )}
+                            {state === 'done' && (
+                              <CheckCircleIcon className="w-3 h-3 flex-shrink-0" />
+                            )}
+                            {state === 'pending' && (
+                              <div className="w-3 h-3 rounded-full border border-neutral-300 dark:border-neutral-600 flex-shrink-0" />
+                            )}
+                            <span className="truncate">{label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Show results as they stream in */}
+                {results.length > 0 && (
+                  <AnalysisResults
+                    results={results}
+                    selectedRoles={selectedRoles}
+                    setSelectedRoles={setSelectedRoles}
+                    resolvedNames={resolvedNames}
+                    theme={theme}
+                    selectedForExport={selectedForExport}
+                    setSelectedForExport={setSelectedForExport}
+                  />
+                )}
               </div>
             )}
 

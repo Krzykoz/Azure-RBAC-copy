@@ -7,7 +7,7 @@ import {
     MigrationStatus,
     IdentityType,
 } from '../types';
-import { analyzePolicies, analyzeExistingCoverage } from '../services/analysisService';
+import { runAnalysis as runAnalysisBridge } from '../services/tauriBridge';
 import { STRATEGY_PRIORITY } from '../constants';
 
 interface UseAnalysisProps {
@@ -18,6 +18,13 @@ interface UseAnalysisProps {
     includeCustomRoles: boolean;
 }
 
+export interface AnalysisProgress {
+    total: number;
+    completed: number;
+    /** objectId -> progress state */
+    identities: Record<string, 'pending' | 'analyzing' | 'done'>;
+}
+
 interface UseAnalysisResult {
     results: MigrationAnalysis[];
     selectedRoles: Record<string, number>;
@@ -26,6 +33,7 @@ interface UseAnalysisResult {
     setSelectedForExport: React.Dispatch<React.SetStateAction<Set<string>>>;
     runAnalysis: () => Promise<void>;
     clearResults: () => void;
+    progress: AnalysisProgress | null;
 }
 
 /**
@@ -58,7 +66,9 @@ const findBestStrategyIndex = (recommendations: MigrationAnalysis['recommendatio
 };
 
 /**
- * Hook for managing RBAC analysis state and execution
+ * Hook for managing RBAC analysis state and execution.
+ * Sends all policies in a single batched IPC call to the Rust backend,
+ * which uses Rayon for true multi-core parallelism internally.
  */
 export const useAnalysis = ({
     selectedVault,
@@ -70,6 +80,7 @@ export const useAnalysis = ({
     const [results, setResults] = useState<MigrationAnalysis[]>([]);
     const [selectedRoles, setSelectedRoles] = useState<Record<string, number>>({});
     const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
+    const [progress, setProgress] = useState<AnalysisProgress | null>(null);
 
     // Filter roles based on custom role toggle
     const rolesToAnalyze = useMemo(() => {
@@ -80,52 +91,72 @@ export const useAnalysis = ({
     const runAnalysis = useCallback(async () => {
         if (!selectedVault) return;
 
-        // Run analysis (using setTimeout to allow UI to update)
-        return new Promise<void>((resolve) => {
-            setTimeout(() => {
-                const analysis = analyzePolicies(selectedVault.accessPolicies, rolesToAnalyze);
+        const policies = selectedVault.accessPolicies;
+        const total = policies.length;
 
-                // Enhance with existing coverage check
-                const enhancedAnalysis = analysis.map((a) => {
-                    const coverage = analyzeExistingCoverage(
-                        a.originalPolicy,
-                        roleAssignments,
-                        availableRoles,
-                        selectedVault.id
-                    );
-                    return { ...a, existingCoverage: coverage };
-                });
-
-                setResults(enhancedAnalysis);
-
-                // Set default strategy selections
-                const defaults: Record<string, number> = {};
-                enhancedAnalysis.forEach((a) => {
-                    defaults[a.originalPolicy.objectId] = findBestStrategyIndex(a.recommendations);
-                });
-                setSelectedRoles(defaults);
-
-                // Initialize export selection (all except Unknown type)
-                const exportIds = new Set<string>();
-                enhancedAnalysis.forEach((a) => {
-                    const resolvedType = resolvedNames[a.originalPolicy.objectId]?.type;
-                    const policyType = a.originalPolicy.type;
-                    const type = resolvedType || policyType || 'Unknown';
-                    if (type !== 'Unknown') {
-                        exportIds.add(a.originalPolicy.objectId);
-                    }
-                });
-                setSelectedForExport(exportIds);
-
-                resolve();
-            }, 100);
+        // Initialize progress — mark all as analyzing (batch runs all at once)
+        const identities: Record<string, 'pending' | 'analyzing' | 'done'> = {};
+        policies.forEach((p) => {
+            identities[p.objectId] = 'analyzing';
         });
-    }, [selectedVault, rolesToAnalyze, roleAssignments, availableRoles, resolvedNames]);
+        setProgress({ total, completed: 0, identities: { ...identities } });
+
+        // Reset state
+        setResults([]);
+        setSelectedRoles({});
+        setSelectedForExport(new Set());
+
+        try {
+            // Single IPC call — Rust parallelizes internally via Rayon
+            const enhancedAnalysis = await runAnalysisBridge(
+                policies,
+                rolesToAnalyze,
+                roleAssignments,
+                selectedVault.id,
+                includeCustomRoles,
+            );
+
+            setResults(enhancedAnalysis);
+
+            // Set default strategy selections
+            const defaults: Record<string, number> = {};
+            enhancedAnalysis.forEach((a) => {
+                defaults[a.originalPolicy.objectId] = findBestStrategyIndex(a.recommendations);
+            });
+            setSelectedRoles(defaults);
+
+            // Initialize export selection (all except Unknown type)
+            const exportIds = new Set<string>();
+            enhancedAnalysis.forEach((a) => {
+                const resolvedType = resolvedNames[a.originalPolicy.objectId]?.type;
+                const policyType = a.originalPolicy.type;
+                const type = resolvedType || policyType || 'Unknown';
+                if (type !== 'Unknown') {
+                    exportIds.add(a.originalPolicy.objectId);
+                }
+            });
+            setSelectedForExport(exportIds);
+
+            // Mark all done
+            const doneIdentities: Record<string, 'pending' | 'analyzing' | 'done'> = {};
+            policies.forEach((p) => {
+                doneIdentities[p.objectId] = 'done';
+            });
+            setProgress({ total, completed: total, identities: doneIdentities });
+        } catch (err) {
+            console.error('Analysis failed:', err);
+            throw err;
+        } finally {
+            // Clear progress after a brief delay so user sees completion
+            setTimeout(() => setProgress(null), 500);
+        }
+    }, [selectedVault, rolesToAnalyze, roleAssignments, includeCustomRoles, resolvedNames]);
 
     const clearResults = useCallback(() => {
         setResults([]);
         setSelectedRoles({});
         setSelectedForExport(new Set());
+        setProgress(null);
     }, []);
 
     return {
@@ -136,5 +167,6 @@ export const useAnalysis = ({
         setSelectedForExport,
         runAnalysis,
         clearResults,
+        progress,
     };
 };

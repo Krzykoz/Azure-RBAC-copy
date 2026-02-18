@@ -1,0 +1,173 @@
+name: Build & Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux x86_64 ──────────────────────────────────
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+            args: '--target x86_64-unknown-linux-gnu'
+
+          # ── Linux ARM64 ──────────────────────────────────
+          - platform: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-gnu
+            label: linux-arm64
+            args: '--target aarch64-unknown-linux-gnu --bundles deb rpm'
+
+          # ── macOS x86_64 (Intel) ─────────────────────────
+          - platform: macos-latest
+            rust_target: x86_64-apple-darwin
+            label: macos-x86_64
+            args: '--target x86_64-apple-darwin'
+
+          # ── macOS ARM64 (Apple Silicon) ──────────────────
+          - platform: macos-latest
+            rust_target: aarch64-apple-darwin
+            label: macos-arm64
+            args: '--target aarch64-apple-darwin'
+
+          # ── Windows x86_64 ──────────────────────────────
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+            args: '--target x86_64-pc-windows-msvc'
+
+          # ── Windows ARM64 ──────────────────────────────
+          - platform: windows-latest
+            rust_target: aarch64-pc-windows-msvc
+            label: windows-arm64
+            args: '--target aarch64-pc-windows-msvc'
+
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.label }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js ────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      # ── Rust toolchain ────────────────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # ── Linux x86_64 dependencies ─────────────────────
+      - name: Install Linux x86_64 dependencies
+        if: matrix.label == 'linux-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # ── Linux ARM64 cross-compile dependencies ────────
+      - name: Install Linux ARM64 cross-compile dependencies
+        if: matrix.label == 'linux-arm64'
+        run: |
+          sudo dpkg --add-architecture arm64
+          # Add arm64 package sources
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          # Pin existing sources to amd64 only
+          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libwebkit2gtk-4.1-dev:arm64 \
+            libgtk-3-dev:arm64 \
+            libssl-dev:arm64 \
+            patchelf \
+            librsvg2-dev:arm64
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
+
+      # ── Install frontend dependencies ─────────────────
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # ── Build with tauri-action ───────────────────────
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Linux ARM64 cross-compile environment
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.label == 'linux-arm64' && 'aarch64-linux-gnu-gcc' || '' }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.label == 'linux-arm64' && 'aarch64-linux-gnu-gcc' || '' }}
+          CXX_aarch64_unknown_linux_gnu: ${{ matrix.label == 'linux-arm64' && 'aarch64-linux-gnu-g++' || '' }}
+        with:
+          args: ${{ matrix.args }}
+          # Only create release on tag push
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || '' }}
+          releaseBody: 'Download the installer for your platform below.'
+          releaseDraft: true
+          prerelease: false
+
+      # ── macOS: ad-hoc sign to prevent Gatekeeper "corrupted" error ──
+      - name: Sign macOS app
+        if: startsWith(matrix.label, 'macos')
+        run: |
+          APP_PATH="src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/Azure Key Vault RBAC Migrator.app"
+          # Remove quarantine attributes and ad-hoc sign
+          xattr -cr "$APP_PATH"
+          codesign --force --deep --sign - "$APP_PATH"
+          echo "✅ Ad-hoc signed: $APP_PATH"
+          codesign --verify --verbose "$APP_PATH" || true
+
+      # ── Upload build artifacts ────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/**/*
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── Upload portable exe for Windows ────────────
+      - name: Upload portable exe
+        if: startsWith(matrix.label, 'windows')
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.rust_target }}/release/*.exe
+            !src-tauri/target/${{ matrix.rust_target }}/release/build/**
+          if-no-files-found: error
+          retention-days: 30
+
