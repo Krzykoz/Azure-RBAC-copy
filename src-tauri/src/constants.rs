@@ -9,7 +9,7 @@ pub const ARM_ENDPOINT: &str = "https://management.azure.com";
 pub const GRAPH_ENDPOINT: &str = "https://graph.microsoft.com/v1.0";
 
 /// Analysis constants
-pub const MAX_COMBINATION_SIZE: usize = 3;
+pub const MAX_COMBINATION_SIZE: usize = 10;
 pub const GRAPH_BATCH_SIZE: usize = 20;
 pub const VAULT_CONCURRENCY_LIMIT: usize = 5;
 
