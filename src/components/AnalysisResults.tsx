@@ -301,7 +301,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             }
             return next;
         });
-    }, []);
+    }, [setSelectedForExport]);
 
     const toggleCategorySelection = React.useCallback((groupData: MigrationAnalysis[]) => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
@@ -340,7 +340,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
         return 'some';
     }, [results, selectedForExport]);
 
-    const getCategorySelectionState = useCallback((groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
+    const calculateCategorySelectionState = useCallback((groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
         const selectedCount = ids.filter(id => selectedForExport.has(id)).length;
         if (selectedCount === 0) return 'none';
@@ -350,7 +350,7 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
 
     const renderIdentityGroup = (title: string, groupData: MigrationAnalysis[], icon: React.ReactNode) => {
         if (groupData.length === 0) return null;
-        const selectionState = getCategorySelectionState(groupData);
+        const selectionState = calculateCategorySelectionState(groupData);
 
         return (
             <React.Fragment>
