@@ -1,11 +1,42 @@
 import React, { useState } from 'react';
-import { KeyVault, RoleDefinition } from '../types';
-import {
-    parseKeyVaultResponse,
-    KeyVaultResponse,
-} from '../services/azureResponseParser';
+import { KeyVault, RoleDefinition, AccessPolicyEntry } from '../types';
 import { ArrowLeftIcon, CheckCircleIcon } from './Icons';
 import { CopyableCommand } from './ui';
+
+interface KeyVaultResponse {
+    id: string;
+    name: string;
+    location: string;
+    properties: {
+        sku?: { name: string };
+        accessPolicies?: Array<{
+            tenantId: string;
+            objectId: string;
+            applicationId?: string;
+            permissions?: Record<string, string[]>;
+        }>;
+    };
+}
+
+/** Parse a raw Key Vault JSON response into the app's KeyVault type */
+function parseKeyVaultResponse(vaultData: KeyVaultResponse): KeyVault {
+    const accessPolicies: AccessPolicyEntry[] = (vaultData.properties.accessPolicies || []).map((ap) => ({
+        tenantId: ap.tenantId,
+        objectId: ap.objectId,
+        applicationId: ap.applicationId,
+        displayName: undefined,
+        type: ap.applicationId ? 'Application' : 'Unknown',
+        permissions: ap.permissions || {},
+    }));
+
+    return {
+        id: vaultData.id,
+        name: vaultData.name,
+        location: vaultData.location,
+        sku: vaultData.properties.sku?.name || 'Unknown',
+        accessPolicies,
+    };
+}
 
 interface OfflineInputPageProps {
     onStart: (vaults: KeyVault[], roles: RoleDefinition[]) => void;
@@ -109,7 +140,7 @@ export const OfflineInputPage: React.FC<OfflineInputPageProps> = ({
                 } as RoleDefinition;
             });
 
-            const vaults = vaultList.map((v) => parseKeyVaultResponse(v, {}));
+            const vaults = vaultList.map((v) => parseKeyVaultResponse(v));
             onStart(vaults, roleList);
         } catch (e: any) {
             console.error(e);

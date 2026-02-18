@@ -1,8 +1,9 @@
 /**
- * Bridge module that routes business logic calls to the Rust backend via Tauri IPC.
- * Falls back to browser-based implementations when not running in Tauri (e.g., dev mode).
+ * Bridge module that routes all business logic to the Rust backend via Tauri IPC.
+ * No browser fallbacks — this app requires the Tauri runtime.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import type {
   Subscription,
   KeyVault,
@@ -16,199 +17,94 @@ import type {
 // Re-export ResolvedIdentity for convenience
 export type ResolvedIdentity = { name: string; type: IdentityType };
 
-const isTauri = (): boolean => {
-  return !!(window as any).__TAURI_INTERNALS__;
-};
-
-let invokeImpl: ((cmd: string, args?: Record<string, unknown>) => Promise<any>) | null = null;
-
-async function getInvoke() {
-  if (invokeImpl) return invokeImpl;
-  if (isTauri()) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    invokeImpl = invoke;
-    return invoke;
-  }
-  return null;
-}
-
 // --- Token Commands ---
 
-export async function validateToken(token: string): Promise<void> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('validate_token', { token });
-  }
-  // Fallback to browser fetch
-  const { validateToken: browserValidate } = await import('../services/azureService');
-  return browserValidate(token);
+export function validateToken(token: string): Promise<void> {
+  return invoke('validate_token', { token });
 }
 
 export function getUserName(token: string): Promise<string> {
-  return getInvoke().then(async (invoke) => {
-    if (invoke) {
-      return invoke('get_user_name', { token });
-    }
-    const { getUserNameFromToken } = await import('../utils/tokenUtils');
-    return getUserNameFromToken(token);
-  });
+  return invoke('get_user_name', { token });
 }
 
 export function getTenantId(token: string): Promise<string | null> {
-  return getInvoke().then(async (invoke) => {
-    if (invoke) {
-      return invoke('get_tenant_id', { token });
-    }
-    const { getTenantIdFromToken } = await import('../utils/tokenUtils');
-    return getTenantIdFromToken(token);
-  });
+  return invoke('get_tenant_id', { token });
 }
 
 // --- Azure Data Commands ---
 
-export async function getSubscriptions(token: string): Promise<Subscription[]> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('get_subscriptions', { token });
-  }
-  const { getSubscriptions: browserGet } = await import('../services/azureService');
-  return browserGet(token);
+export function getSubscriptions(token: string): Promise<Subscription[]> {
+  return invoke('get_subscriptions', { token });
 }
 
-export async function getTenants(token: string): Promise<Record<string, string>> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('get_tenants', { token });
-  }
-  const { getTenants: browserGet } = await import('../services/azureService');
-  return browserGet(token);
+export function getTenants(token: string): Promise<Record<string, string>> {
+  return invoke('get_tenants', { token });
 }
 
-export async function getKeyVaults(token: string, subscriptionId: string): Promise<KeyVault[]> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('get_key_vaults', { token, subscriptionId });
-  }
-  const { getKeyVaults: browserGet } = await import('../services/azureService');
-  return browserGet(token, subscriptionId);
+export function getKeyVaults(token: string, subscriptionId: string): Promise<KeyVault[]> {
+  return invoke('get_key_vaults', { token, subscriptionId });
 }
 
-export async function getRoleDefinitions(
+export function getRoleDefinitions(
   token: string,
   subscriptionId: string
 ): Promise<RoleDefinition[]> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('get_role_definitions', { token, subscriptionId });
-  }
-  const { getRoleDefinitions: browserGet } = await import('../services/azureService');
-  return browserGet(token, subscriptionId);
+  return invoke('get_role_definitions', { token, subscriptionId });
 }
 
-export async function getRoleAssignments(
+export function getRoleAssignments(
   token: string,
   subscriptionId: string
 ): Promise<RoleAssignment[]> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('get_role_assignments', { token, subscriptionId });
-  }
-  const { getRoleAssignments: browserGet } = await import('../services/azureService');
-  return browserGet(token, subscriptionId);
+  return invoke('get_role_assignments', { token, subscriptionId });
 }
 
-export async function resolveIdentities(
+export function resolveIdentities(
   objectIds: string[],
   token: string
 ): Promise<Record<string, ResolvedIdentity>> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('resolve_identities', { objectIds, token });
-  }
-  const { resolveBatchIdentities } = await import('../services/azureService');
-  return resolveBatchIdentities(objectIds, token);
+  return invoke('resolve_identities', { objectIds, token });
 }
 
 // --- Analysis Commands ---
 
-export async function runAnalysis(
+export function runAnalysis(
   policies: AccessPolicyEntry[],
   availableRoles: RoleDefinition[],
   roleAssignments: RoleAssignment[],
   vaultId: string,
   includeCustomRoles: boolean
 ): Promise<MigrationAnalysis[]> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('run_analysis', {
-      policies,
-      availableRoles,
-      roleAssignments,
-      vaultId,
-      includeCustomRoles,
-    });
-  }
-  // Fallback to browser-based analysis
-  const { analyzePolicies, analyzeExistingCoverage } = await import(
-    '../services/analysisService'
-  );
-  const rolesToAnalyze = includeCustomRoles
-    ? availableRoles
-    : availableRoles.filter((r) => r.properties.type === 'BuiltInRole');
-
-  const analysis = analyzePolicies(policies, rolesToAnalyze);
-  return analysis.map((a) => {
-    const coverage = analyzeExistingCoverage(
-      a.originalPolicy,
-      roleAssignments,
-      availableRoles,
-      vaultId
-    );
-    return { ...a, existingCoverage: coverage };
+  return invoke('run_analysis', {
+    policies,
+    availableRoles,
+    roleAssignments,
+    vaultId,
+    includeCustomRoles,
   });
 }
 
-export async function analyzeSinglePolicy(
+export function analyzeSinglePolicy(
   policy: AccessPolicyEntry,
   availableRoles: RoleDefinition[],
   roleAssignments: RoleAssignment[],
   vaultId: string,
   includeCustomRoles: boolean
 ): Promise<MigrationAnalysis> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    return invoke('analyze_single_policy', {
-      policy,
-      availableRoles,
-      roleAssignments,
-      vaultId,
-      includeCustomRoles,
-    });
-  }
-  // Fallback to browser-based analysis
-  const { analyzePolicies, analyzeExistingCoverage } = await import(
-    '../services/analysisService'
-  );
-  const rolesToAnalyze = includeCustomRoles
-    ? availableRoles
-    : availableRoles.filter((r) => r.properties.type === 'BuiltInRole');
-
-  const analysis = analyzePolicies([policy], rolesToAnalyze);
-  const a = analysis[0];
-  const coverage = analyzeExistingCoverage(
-    a.originalPolicy,
-    roleAssignments,
+  return invoke('analyze_single_policy', {
+    policy,
     availableRoles,
-    vaultId
-  );
-  return { ...a, existingCoverage: coverage };
+    roleAssignments,
+    vaultId,
+    includeCustomRoles,
+  });
 }
 
 // --- Export Commands ---
 
 export type ExportFormat = 'csv' | 'json' | 'powershell';
 
-export async function exportData(
+export function exportData(
   format: ExportFormat,
   results: MigrationAnalysis[],
   selectedRoles: Record<string, number>,
@@ -218,57 +114,30 @@ export async function exportData(
   subscriptionId: string,
   vaultResourceId: string
 ): Promise<string> {
-  const invoke = await getInvoke();
-  if (invoke) {
-    switch (format) {
-      case 'csv':
-        return invoke('export_csv', {
-          results,
-          selectedRoles,
-          resolvedNames,
-          selectedForExport,
-        });
-      case 'json':
-        return invoke('export_json', {
-          results,
-          selectedRoles,
-          resolvedNames,
-          selectedForExport,
-        });
-      case 'powershell':
-        return invoke('export_powershell', {
-          results,
-          selectedRoles,
-          resolvedNames,
-          selectedForExport,
-          vaultName,
-          subscriptionId,
-          vaultResourceId,
-        });
-    }
-  }
-
-  // Fallback to browser-based export
-  const { exportToCSV, exportToJSON, exportToPowerShell } = await import(
-    '../utils/exportUtils'
-  );
-  const filteredResults = results.filter((r) =>
-    selectedForExport.includes(r.originalPolicy.objectId)
-  );
-
   switch (format) {
     case 'csv':
-      return exportToCSV(filteredResults, selectedRoles, resolvedNames);
-    case 'json':
-      return exportToJSON(filteredResults, selectedRoles, resolvedNames);
-    case 'powershell':
-      return exportToPowerShell(
-        filteredResults,
+      return invoke('export_csv', {
+        results,
         selectedRoles,
         resolvedNames,
+        selectedForExport,
+      });
+    case 'json':
+      return invoke('export_json', {
+        results,
+        selectedRoles,
+        resolvedNames,
+        selectedForExport,
+      });
+    case 'powershell':
+      return invoke('export_powershell', {
+        results,
+        selectedRoles,
+        resolvedNames,
+        selectedForExport,
         vaultName,
         subscriptionId,
-        vaultResourceId
-      );
+        vaultResourceId,
+      });
   }
 }
