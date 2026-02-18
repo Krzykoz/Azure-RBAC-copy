@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MigrationStatus, KeyVault, RoleDefinition } from '../types';
 import { useAzureData, useAnalysis, useExport, ExportFormat, AnalysisProgress } from '../hooks';
 import { ArrowRightIcon, LoaderIcon, ShieldCheckIcon, CheckCircleIcon, DownloadIcon } from './Icons';
@@ -77,37 +77,46 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   }, [results, offlineData, resolveIdentities]);
 
+  // Track which identities have been processed for export selection
+  const processedForExportRef = useRef<Set<string>>(new Set());
+
   // Update export selection when resolved names change (only for new resolutions)
   useEffect(() => {
     if (results.length === 0 || Object.keys(resolvedNames).length === 0) return;
     
-    // Only update if there are new resolved names that aren't already processed
-    const exportIds = new Set(selectedForExport);
-    let hasChanges = false;
+    // Only update if there are new resolved names that haven't been processed
+    const newExportIds: string[] = [];
     
     results.forEach((r) => {
       const objectId = r.originalPolicy.objectId;
-      // Skip if already in export selection
-      if (exportIds.has(objectId)) return;
+      // Skip if already processed
+      if (processedForExportRef.current.has(objectId)) return;
       
       const resolvedType = resolvedNames[objectId]?.type;
       const policyType = r.originalPolicy.type;
       const type = resolvedType || policyType || 'Unknown';
       
       if (type !== 'Unknown') {
-        exportIds.add(objectId);
-        hasChanges = true;
+        newExportIds.push(objectId);
+        processedForExportRef.current.add(objectId);
       }
     });
     
-    if (hasChanges) {
-      setSelectedForExport(exportIds);
+    if (newExportIds.length > 0) {
+      setSelectedForExport(prev => {
+        const next = new Set(prev);
+        newExportIds.forEach(id => next.add(id));
+        return next;
+      });
     }
-  }, [resolvedNames, results, selectedForExport, setSelectedForExport]);
+  }, [resolvedNames, results, setSelectedForExport]);
 
   const handleAnalyze = async () => {
     if (!selectedVault) return;
     setStatus(MigrationStatus.ANALYZING);
+    
+    // Reset processed tracking when starting new analysis
+    processedForExportRef.current.clear();
 
     try {
       await runAnalysis();

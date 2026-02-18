@@ -305,9 +305,9 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
 
     const toggleCategorySelection = React.useCallback((groupData: MigrationAnalysis[]) => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
-        const allSelected = ids.every(id => selectedForExport.has(id));
-
+        
         setSelectedForExport(prev => {
+            const allSelected = ids.every(id => prev.has(id));
             const next = new Set(prev);
             if (allSelected) {
                 ids.forEach(id => next.delete(id));
@@ -316,20 +316,20 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             }
             return next;
         });
-    }, [selectedForExport]);
+    }, [setSelectedForExport]);
 
     const toggleAllSelection = React.useCallback(() => {
-        const allIds = results.map(r => r.originalPolicy.objectId);
-        const allSelected = allIds.every(id => selectedForExport.has(id));
-
         setSelectedForExport(prev => {
+            const allIds = results.map(r => r.originalPolicy.objectId);
+            const allSelected = allIds.every(id => prev.has(id));
+            
             if (allSelected) {
                 return new Set();
             } else {
                 return new Set(allIds);
             }
         });
-    }, [results, selectedForExport]);
+    }, [results, setSelectedForExport]);
 
     // Memoize selection state calculations to avoid unnecessary filtering on every render
     const allSelectionState = useMemo((): 'all' | 'some' | 'none' => {
