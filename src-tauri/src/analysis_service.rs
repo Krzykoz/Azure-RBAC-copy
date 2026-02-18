@@ -368,9 +368,28 @@ fn run_weighted_analysis(
     }
 }
 
+/// Build a normalized cache key from permissions.
+/// Two policies with the same (sorted) key/secret/cert/storage permissions
+/// will always produce the same recommended roles.
+fn permission_cache_key(perms: &PolicyPermissions) -> String {
+    fn sorted_lower(v: &[String]) -> Vec<String> {
+        let mut s: Vec<String> = v.iter().map(|p| p.to_lowercase()).collect();
+        s.sort();
+        s
+    }
+    format!(
+        "K:{};S:{};C:{};T:{}",
+        sorted_lower(&perms.keys).join(","),
+        sorted_lower(&perms.secrets).join(","),
+        sorted_lower(&perms.certificates).join(","),
+        sorted_lower(&perms.storage).join(","),
+    )
+}
+
 /// Analyze policies and return migration analysis results.
-/// Uses Rayon for parallel iteration across policies and shared
-/// precomputed data to eliminate redundant work.
+/// Groups policies by their permission set so identities with identical
+/// permissions are analyzed only once. Unique groups are processed in
+/// parallel via Rayon, then results are cloned to all matching policies.
 pub fn analyze_policies(
     policies: &[AccessPolicyEntry],
     available_roles: &[RoleDefinition],
@@ -391,13 +410,23 @@ pub fn analyze_policies(
         .cloned()
         .collect();
 
-    // Use Rayon to parallelize across policies
-    policies
-        .par_iter()
-        .map(|policy| {
+    // Group policies by normalized permissions
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, policy) in policies.iter().enumerate() {
+        let key = permission_cache_key(&policy.permissions);
+        groups.entry(key).or_default().push(idx);
+    }
+
+    // Analyze each unique permission group in parallel
+    let group_entries: Vec<(String, Vec<usize>)> = groups.into_iter().collect();
+    let group_results: Vec<(Vec<usize>, Vec<SuggestedRole>)> = group_entries
+        .into_par_iter()
+        .map(|(_key, indices)| {
+            // Use the first policy in the group as representative
+            let policy = &policies[indices[0]];
             let required_actions = get_required_actions(policy, perm_map);
 
-            // Precompute per-role coverage ONCE for this policy
+            // Precompute per-role coverage ONCE for this permission set
             let precomputed: Vec<RoleCoverage> = kv_roles
                 .iter()
                 .map(|role| calculate_coverage(&required_actions, role, known_actions))
@@ -416,12 +445,27 @@ pub fn analyze_policies(
                 .collect();
 
             let recommendations = merge_duplicate_strategies(all_recommendations);
+            (indices, recommendations)
+        })
+        .collect();
 
-            MigrationAnalysis {
-                original_policy: policy.clone(),
-                recommendations,
+    // Distribute results to all policies (preserving original order)
+    let mut results: Vec<Option<MigrationAnalysis>> = vec![None; policies.len()];
+    for (indices, recommendations) in group_results {
+        for &idx in &indices {
+            results[idx] = Some(MigrationAnalysis {
+                original_policy: policies[idx].clone(),
+                recommendations: recommendations.clone(),
                 existing_coverage: None,
-            }
+            });
+        }
+    }
+
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            r.unwrap_or_else(|| panic!("analysis result missing for policy index {i}"))
         })
         .collect()
 }
