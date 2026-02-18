@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -27,11 +28,13 @@ impl serde::Serialize for AzureError {
     }
 }
 
-fn build_client() -> Result<Client, AzureError> {
+/// Shared HTTP client — reuses connections, enables HTTP/2 multiplexing
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
+        .pool_max_idle_per_host(20)
         .build()
-        .map_err(AzureError::NetworkError)
-}
+        .expect("Failed to build HTTP client")
+});
 
 /// Validate that a subscription ID has a valid GUID-like format
 fn validate_subscription_id(subscription_id: &str) -> Result<(), AzureError> {
@@ -53,8 +56,7 @@ async fn azure_fetch<T: serde::de::DeserializeOwned>(
     url: &str,
     token: &str,
 ) -> Result<T, AzureError> {
-    let client = build_client()?;
-    let response = client
+    let response = HTTP_CLIENT
         .get(url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
@@ -506,10 +508,6 @@ pub async fn resolve_batch_identities(
     };
 
     let mut results = HashMap::new();
-    let client = match build_client() {
-        Ok(c) => c,
-        Err(_) => return results,
-    };
 
     for chunk in unique_ids.chunks(GRAPH_BATCH_SIZE) {
         let chunk_ids: Vec<&str> = chunk.iter().map(|s| s.as_str()).collect();
@@ -518,7 +516,7 @@ pub async fn resolve_batch_identities(
             "types": ["user", "group", "servicePrincipal", "application"]
         });
 
-        match client
+        match HTTP_CLIENT
             .post(&format!("{}/directoryObjects/getByIds", GRAPH_ENDPOINT))
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
