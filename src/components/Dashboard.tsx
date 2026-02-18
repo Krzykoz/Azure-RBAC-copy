@@ -77,21 +77,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   }, [results, offlineData, resolveIdentities]);
 
-  // Update export selection when resolved names change
+  // Update export selection when resolved names change (only for new resolutions)
   useEffect(() => {
-    if (results.length > 0 && Object.keys(resolvedNames).length > 0) {
-      const exportIds = new Set<string>();
-      results.forEach((r) => {
-        const resolvedType = resolvedNames[r.originalPolicy.objectId]?.type;
-        const policyType = r.originalPolicy.type;
-        const type = resolvedType || policyType || 'Unknown';
-        if (type !== 'Unknown') {
-          exportIds.add(r.originalPolicy.objectId);
-        }
-      });
+    if (results.length === 0 || Object.keys(resolvedNames).length === 0) return;
+    
+    // Only update if there are new resolved names that aren't already processed
+    const exportIds = new Set(selectedForExport);
+    let hasChanges = false;
+    
+    results.forEach((r) => {
+      const objectId = r.originalPolicy.objectId;
+      // Skip if already in export selection
+      if (exportIds.has(objectId)) return;
+      
+      const resolvedType = resolvedNames[objectId]?.type;
+      const policyType = r.originalPolicy.type;
+      const type = resolvedType || policyType || 'Unknown';
+      
+      if (type !== 'Unknown') {
+        exportIds.add(objectId);
+        hasChanges = true;
+      }
+    });
+    
+    if (hasChanges) {
       setSelectedForExport(exportIds);
     }
-  }, [resolvedNames, results, setSelectedForExport]);
+  }, [resolvedNames, results, selectedForExport, setSelectedForExport]);
 
   const handleAnalyze = async () => {
     if (!selectedVault) return;
