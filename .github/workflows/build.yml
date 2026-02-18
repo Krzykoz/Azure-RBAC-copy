@@ -159,3 +159,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # ── Upload portable exe for Windows ────────────
+      - name: Upload portable exe
+        if: startsWith(matrix.label, 'windows')
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.rust_target }}/release/*.exe
+            !src-tauri/target/${{ matrix.rust_target }}/release/build/**
+          if-no-files-found: error
+          retention-days: 30
+
