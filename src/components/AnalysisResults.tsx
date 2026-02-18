@@ -268,30 +268,30 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
         return () => el.removeEventListener('wheel', handleWheel);
     }, []);
 
-    const toggleSuggestion = (id: string) => {
+    const toggleSuggestion = React.useCallback((id: string) => {
         setShowSuggestions(prev => ({
             ...prev,
             [id]: !prev[id]
         }));
-    };
+    }, []);
 
-    const toggleCoverageDetails = (id: string) => {
+    const toggleCoverageDetails = React.useCallback((id: string) => {
         setShowCoverageDetails(prev => ({
             ...prev,
             [id]: !prev[id]
         }));
-    };
+    }, []);
 
     const [showPolicyDetails, setShowPolicyDetails] = React.useState<Record<string, boolean>>({});
-    const togglePolicyDetails = (id: string) => {
+    const togglePolicyDetails = React.useCallback((id: string) => {
         setShowPolicyDetails(prev => ({
             ...prev,
             [id]: !prev[id]
         }));
-    };
+    }, []);
 
     // Selection helpers
-    const toggleItemSelection = (objectId: string) => {
+    const toggleItemSelection = React.useCallback((objectId: string) => {
         setSelectedForExport(prev => {
             const next = new Set(prev);
             if (next.has(objectId)) {
@@ -301,9 +301,9 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             }
             return next;
         });
-    };
+    }, []);
 
-    const toggleCategorySelection = (groupData: MigrationAnalysis[]) => {
+    const toggleCategorySelection = React.useCallback((groupData: MigrationAnalysis[]) => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
         const allSelected = ids.every(id => selectedForExport.has(id));
 
@@ -316,9 +316,9 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
             }
             return next;
         });
-    };
+    }, [selectedForExport]);
 
-    const toggleAllSelection = () => {
+    const toggleAllSelection = React.useCallback(() => {
         const allIds = results.map(r => r.originalPolicy.objectId);
         const allSelected = allIds.every(id => selectedForExport.has(id));
 
@@ -329,23 +329,24 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
                 return new Set(allIds);
             }
         });
-    };
+    }, [results, selectedForExport]);
 
-    const getAllSelectionState = (): 'all' | 'some' | 'none' => {
+    // Memoize selection state calculations to avoid unnecessary filtering on every render
+    const allSelectionState = useMemo((): 'all' | 'some' | 'none' => {
         const allIds = results.map(r => r.originalPolicy.objectId);
         const selectedCount = allIds.filter(id => selectedForExport.has(id)).length;
         if (selectedCount === 0) return 'none';
         if (selectedCount === allIds.length) return 'all';
         return 'some';
-    };
+    }, [results, selectedForExport]);
 
-    const getCategorySelectionState = (groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
+    const getCategorySelectionState = useCallback((groupData: MigrationAnalysis[]): 'all' | 'some' | 'none' => {
         const ids = groupData.map(r => r.originalPolicy.objectId);
         const selectedCount = ids.filter(id => selectedForExport.has(id)).length;
         if (selectedCount === 0) return 'none';
         if (selectedCount === ids.length) return 'all';
         return 'some';
-    };
+    }, [selectedForExport]);
 
     const renderIdentityGroup = (title: string, groupData: MigrationAnalysis[], icon: React.ReactNode) => {
         if (groupData.length === 0) return null;
@@ -656,8 +657,8 @@ export const AnalysisResults: React.FC<AnalysisResultsProps> = ({
                     <div className="grid grid-cols-12 gap-4 px-6 py-3 bg-neutral-50 dark:bg-neutral-900/50 border-b border-neutral-200 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-400 uppercase tracking-wider">
                         <div className="col-span-3 flex items-center gap-4">
                             <Checkbox
-                                checked={getAllSelectionState() === 'all'}
-                                indeterminate={getAllSelectionState() === 'some'}
+                                checked={allSelectionState === 'all'}
+                                indeterminate={allSelectionState === 'some'}
                                 onChange={toggleAllSelection}
                             />
                             Identity
